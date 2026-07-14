@@ -35,6 +35,7 @@ apps/mobile/.generated/
 /.generated/
 artifacts/app-store/screenshots/
 .github/pr-assets/
+artifacts/*.apk
 native/**/target/
 node_modules/
 .alchemy/

@@ -16,6 +16,9 @@ This app has three variants:
 
 Run commands from `apps/mobile`.
 
+For a self-contained, locally signed Android preview APK on Windows, follow
+[`../../docs/operations/android-apk-windows.md`](../../docs/operations/android-apk-windows.md).
+
 T3 Connect is optional and disabled in a fresh clone. Public configuration belongs in the
 repository-root `.env` or `.env.local`, not an `apps/mobile/.env` file. See
 [`../../.env.example`](../../.env.example).
