@@ -50,6 +50,14 @@ type ProjectCliDispatchCommand = Extract<
   { type: "project.create" | "project.meta.update" | "project.delete" }
 >;
 
+const ProjectAddJsonOutput = Schema.Struct({
+  id: ProjectId,
+  title: Schema.String,
+  workspaceRoot: Schema.String,
+  created: Schema.Boolean,
+});
+const encodeProjectAddJson = Schema.encodeSync(Schema.fromJsonString(ProjectAddJsonOutput));
+
 const isEnvironmentHttpCommonError = Schema.is(EnvironmentHttpCommonError);
 
 export class ProjectCommandIdGenerationError extends Schema.TaggedErrorClass<ProjectCommandIdGenerationError>()(
@@ -389,10 +397,11 @@ const runProjectMutation = Effect.fn("runProjectMutation")(function* (
     | Path.Path
     | WorkspacePaths.WorkspacePaths
   >,
+  options?: { readonly quietLogs?: boolean },
 ) {
   const logLevel = yield* GlobalFlag.LogLevel;
   const config = yield* resolveCliAuthConfig(flags, logLevel);
-  const minimumLogLevel = config.logLevel;
+  const minimumLogLevel = options?.quietLogs ? "Error" : config.logLevel;
 
   return yield* Effect.gen(function* () {
     const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
@@ -445,6 +454,14 @@ const projectAddCommand = Command.make("add", {
     Argument.withDescription("Workspace root to add as a project."),
   ),
   title: Flag.string("title").pipe(Flag.withDescription("Optional project title."), Flag.optional),
+  ifMissing: Flag.boolean("if-missing").pipe(
+    Flag.withDescription("Succeed when the workspace is already registered."),
+    Flag.withDefault(false),
+  ),
+  json: Flag.boolean("json").pipe(
+    Flag.withDescription("Emit JSON instead of human-readable output."),
+    Flag.withDefault(false),
+  ),
 }).pipe(
   Command.withDescription("Add a project."),
   Command.withHandler((flags) =>
@@ -464,6 +481,17 @@ const projectAddCommand = Command.make("add", {
           (project) => project.deletedAt === null && project.workspaceRoot === workspaceRoot,
         );
         if (existingProject) {
+          if (flags.ifMissing) {
+            if (flags.json) {
+              return encodeProjectAddJson({
+                id: existingProject.id,
+                title: existingProject.title,
+                workspaceRoot,
+                created: false,
+              });
+            }
+            return `Project ${existingProject.id} (${existingProject.title}) is already registered at ${workspaceRoot}.`;
+          }
           return yield* new ProjectAlreadyExistsError({
             operation: "addProject",
             projectId: existingProject.id,
@@ -482,8 +510,12 @@ const projectAddCommand = Command.make("add", {
           defaultModelSelection: ServerRuntimeStartup.getAutoBootstrapDefaultModelSelection(),
           createdAt: DateTime.formatIso(yield* DateTime.now),
         });
+        if (flags.json) {
+          return encodeProjectAddJson({ id: projectId, title, workspaceRoot, created: true });
+        }
         return `Added project ${projectId} (${title}) at ${workspaceRoot}.`;
       }),
+      { quietLogs: flags.json },
     ),
   ),
 );
