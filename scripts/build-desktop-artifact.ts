@@ -51,7 +51,7 @@ const StageWorkspaceConfig = Schema.Struct({
     libc: Schema.optional(Schema.Array(Schema.String)),
   }),
   // pnpm 11 only reads these from pnpm-workspace.yaml (not package.json#pnpm).
-  // Without allowBuilds the staged `vp install --prod` fails with
+  // Without allowBuilds the staged `pnpm install --prod` fails with
   // ERR_PNPM_IGNORED_BUILDS for packages that have lifecycle scripts.
   allowBuilds: Schema.optional(Schema.Record(Schema.String, Schema.Boolean)),
   patchedDependencies: Schema.optional(Schema.Record(Schema.String, Schema.String)),
@@ -574,6 +574,39 @@ interface StagePackageJson {
 }
 
 export const STAGE_INSTALL_ARGS = ["install", "--prod"] as const;
+
+export function createNodeLifecycleEnvironment(
+  env: NodeJS.ProcessEnv,
+  nodeExecutable: string,
+  hostPlatform: NodeJS.Platform,
+): NodeJS.ProcessEnv {
+  const nextEnv = { ...env };
+  const pathKeys = Object.keys(nextEnv).filter((key) => key.toLowerCase() === "path");
+  const inheritedPath = pathKeys.map((key) => nextEnv[key]).find((value) => value !== undefined);
+  if (hostPlatform === "win32") {
+    for (const key of pathKeys) {
+      delete nextEnv[key];
+    }
+  }
+  const nodeDirectory =
+    hostPlatform === "win32"
+      ? nodeExecutable.replace(/[\\/][^\\/]*$/u, "")
+      : nodeExecutable.replace(/\/[^/]*$/u, "");
+  if (hostPlatform === "win32") {
+    // pnpm prepends dependency .bin directories for lifecycle scripts. Keep the inherited Windows
+    // PATH out of this child because desktop launches can accumulate enough duplicate entries to
+    // exceed cmd.exe's environment limit, at which point every lifecycle executable disappears.
+    const systemRoot = env.SystemRoot ?? env.SYSTEMROOT;
+    nextEnv.PATH = [
+      nodeDirectory,
+      ...(systemRoot ? [`${systemRoot}\\System32`, systemRoot] : []),
+    ].join(";");
+  } else {
+    nextEnv.PATH = inheritedPath ? `${nodeDirectory}:${inheritedPath}` : nodeDirectory;
+  }
+  return nextEnv;
+}
+
 export const DESKTOP_ASAR_UNPACK = ["node_modules/@ff-labs/fff-bin-*/**/*"] as const;
 
 export interface MacPasskeySigningConfiguration {
@@ -1563,6 +1596,12 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const path = yield* Path.Path;
   const fs = yield* FileSystem.FileSystem;
   const hostPlatform = yield* HostProcessPlatform;
+  const workspacePnpmEntrypoint = path.join(repoRoot, "node_modules", "pnpm", "bin", "pnpm.mjs");
+  const nodeRuntimeEnv = createNodeLifecycleEnvironment(
+    process.env,
+    process.execPath,
+    hostPlatform,
+  );
   const workspaceConfig = yield* readWorkspaceConfig();
   const workspaceCatalog = workspaceConfig.catalog ?? {};
   const workspaceOverrides = workspaceConfig.overrides ?? {};
@@ -1791,13 +1830,14 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   }
 
   yield* Effect.log("[desktop-artifact] Installing staged production dependencies...");
-  const installCommand = yield* resolveSpawnCommand("vp", [...STAGE_INSTALL_ARGS]);
   yield* runCommand(
-    ChildProcess.make(installCommand.command, installCommand.args, {
+    // Invoke the pinned package manager directly. Vite+'s forwarding layer can replace PATH on
+    // Windows, which prevents pnpm lifecycle scripts from resolving Node and dependency binaries.
+    ChildProcess.make(process.execPath, [workspacePnpmEntrypoint, ...STAGE_INSTALL_ARGS], {
       cwd: stageAppDir,
-      shell: installCommand.shell,
+      env: nodeRuntimeEnv,
     }),
-    { label: "vp install --prod", verbose: options.verbose },
+    { label: "pnpm install --prod", verbose: options.verbose },
   );
   yield* stageClerkPasskeyNativeBinaries(stageAppDir, options.platform, options.arch);
 
