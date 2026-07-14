@@ -37,6 +37,7 @@ import {
   resolvePackageManagerUserAgent,
   stageLinuxIconSize,
   STAGE_INSTALL_ARGS,
+  createNodeLifecycleEnvironment,
 } from "./build-desktop-artifact.ts";
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
 import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
@@ -244,6 +245,24 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         cpu: ["arm64", "x64"],
       },
     });
+  });
+
+  it("prepends the active Node executable directory to child PATH values", () => {
+    assert.deepStrictEqual(
+      createNodeLifecycleEnvironment(
+        { Path: "C:\\Windows\\System32", OTHER: "value" },
+        "C:\\tools\\node\\node.exe",
+        "win32",
+      ),
+      {
+        PATH: "C:\\tools\\node",
+        OTHER: "value",
+      },
+    );
+    assert.deepStrictEqual(
+      createNodeLifecycleEnvironment({ PATH: "/usr/bin" }, "/opt/node/bin/node", "linux"),
+      { PATH: "/opt/node/bin:/usr/bin" },
+    );
   });
 
   it("stages pnpm 11 allowBuilds and patchedDependencies in the workspace yaml", () => {
