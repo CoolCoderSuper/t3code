@@ -41,6 +41,7 @@ import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import { environmentAuthenticatedAuthLayer } from "./auth/http.ts";
+import { ProjectLiveServerRequestError } from "./cli/project.ts";
 
 const CliRuntimeLayer = Layer.mergeAll(NodeServices.layer, NetService.layer);
 class ProjectCliHttpApi extends HttpApi.make("environment").add(EnvironmentOrchestrationHttpApi) {}
@@ -552,6 +553,46 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
           assert.isTrue(addedProject !== undefined);
           assert.equal(addedProject?.title, "Live Project");
         }),
+      );
+    }),
+  );
+
+  it.effect("refuses offline fallback when a persisted live server is unreachable", () =>
+    Effect.gen(function* () {
+      const baseDir = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "t3-cli-projects-unreachable-live-test-"),
+      );
+      const workspaceRoot = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "t3-cli-projects-unreachable-live-workspace-"),
+      );
+      const config = yield* makeCliTestServerConfig(baseDir);
+      yield* persistServerRuntimeState({
+        path: config.serverRuntimeStatePath,
+        state: {
+          version: 1,
+          pid: process.pid,
+          host: "127.0.0.1",
+          port: 1,
+          origin: "http://127.0.0.1:1",
+          startedAt: "2026-07-14T00:00:00.000Z",
+        },
+      });
+
+      const error = yield* runCliWithRuntime([
+        "project",
+        "add",
+        workspaceRoot,
+        "--base-dir",
+        baseDir,
+      ]).pipe(Effect.flip);
+      assert.instanceOf(error, ProjectLiveServerRequestError);
+      assert.isTrue(NodeFS.existsSync(config.serverRuntimeStatePath));
+
+      const readModel = yield* readPersistedSnapshot(baseDir);
+      assert.isFalse(
+        readModel.projects.some(
+          (project) => project.workspaceRoot === workspaceRoot && project.deletedAt === null,
+        ),
       );
     }),
   );
