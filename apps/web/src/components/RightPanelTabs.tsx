@@ -1,6 +1,6 @@
 import type { ContextMenuItem, PreviewSessionSnapshot } from "@t3tools/contracts";
 import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
-import { ClipboardList, FileDiff, Files, Globe2, Plus, TerminalSquare, X } from "lucide-react";
+import { ClipboardList, FileDiff, Files, Globe2, Map, Plus, TerminalSquare, X } from "lucide-react";
 import {
   type MouseEvent as ReactMouseEvent,
   type ReactElement,
@@ -44,9 +44,11 @@ interface RightPanelTabsProps {
   onAddTerminal: () => void;
   onAddDiff: () => void;
   onAddFiles: () => void;
+  onAddLatitude: () => void;
   browserAvailable: boolean;
   diffAvailable: boolean;
   filesAvailable: boolean;
+  latitudeAvailable: boolean;
   children: ReactNode;
 }
 
@@ -91,9 +93,11 @@ function RightPanelEmptyState(props: {
   onAddTerminal: () => void;
   onAddDiff: () => void;
   onAddFiles: () => void;
+  onAddLatitude: () => void;
   browserAvailable: boolean;
   diffAvailable: boolean;
   filesAvailable: boolean;
+  latitudeAvailable: boolean;
 }) {
   const actions = [
     {
@@ -119,6 +123,14 @@ function RightPanelEmptyState(props: {
       available: props.filesAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.files,
       onClick: props.onAddFiles,
+    },
+    {
+      label: "Latitude",
+      description: "Open this workspace in Latitude.",
+      icon: Map,
+      available: props.latitudeAvailable,
+      disabledReason: "Latitude requires an open project.",
+      onClick: props.onAddLatitude,
     },
     {
       label: "Diff",
@@ -205,6 +217,8 @@ function surfaceTitle(
       );
     case "plan":
       return "Plan";
+    case "latitude":
+      return "Latitude";
     case "preview": {
       const snapshot = surface.resourceId ? sessions[surface.resourceId] : null;
       if (!snapshot || snapshot.navStatus._tag === "Idle") return "Browser";
@@ -266,6 +280,8 @@ function SurfaceIcon({
       return <TerminalSquare className="size-3.5 shrink-0" />;
     case "plan":
       return <ClipboardList className="size-3.5 shrink-0" />;
+    case "latitude":
+      return <Map className="size-3.5 shrink-0" />;
   }
 }
 
@@ -443,6 +459,14 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                 </MenuTrigger>
                 <MenuPopup align="start" side="bottom" sideOffset={6} className="min-w-44">
                   <SurfaceMenuItem
+                    available={props.latitudeAvailable}
+                    disabledReason="Latitude requires an open project."
+                    onClick={props.onAddLatitude}
+                  >
+                    <Map />
+                    Latitude
+                  </SurfaceMenuItem>
+                  <SurfaceMenuItem
                     available={props.browserAvailable}
                     disabledReason={SURFACE_DISABLED_REASONS.browser}
                     onClick={props.onAddBrowser}
@@ -484,9 +508,11 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddTerminal={props.onAddTerminal}
             onAddDiff={props.onAddDiff}
             onAddFiles={props.onAddFiles}
+            onAddLatitude={props.onAddLatitude}
             browserAvailable={props.browserAvailable}
             diffAvailable={props.diffAvailable}
             filesAvailable={props.filesAvailable}
+            latitudeAvailable={props.latitudeAvailable}
           />
         ) : (
           props.children

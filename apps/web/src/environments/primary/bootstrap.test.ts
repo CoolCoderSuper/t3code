@@ -155,6 +155,34 @@ describe("environmentBootstrap", () => {
     });
   });
 
+  it("rebinds a matching loopback target when the server is opened over the LAN", () => {
+    vi.stubEnv("VITE_HTTP_URL", "http://127.0.0.1:13773");
+    vi.stubEnv("VITE_WS_URL", "ws://127.0.0.1:13773");
+    installTestBrowser("http://192.168.11.75:13773/");
+
+    expect(readPrimaryEnvironmentTarget()).toEqual({
+      source: "configured",
+      target: {
+        httpBaseUrl: "http://192.168.11.75:13773/",
+        wsBaseUrl: "ws://192.168.11.75:13773/",
+      },
+    });
+    expect(resolvePrimaryEnvironmentHttpUrl("/api/auth/session")).toBe(
+      "http://192.168.11.75:13773/api/auth/session",
+    );
+  });
+
+  it("does not rebind a loopback target on a different port", () => {
+    vi.stubEnv("VITE_HTTP_URL", "http://127.0.0.1:13773");
+    vi.stubEnv("VITE_WS_URL", "ws://127.0.0.1:13773");
+    installTestBrowser("http://192.168.11.75:8080/");
+
+    expect(readPrimaryEnvironmentTarget().target).toEqual({
+      httpBaseUrl: "http://127.0.0.1:13773/",
+      wsBaseUrl: "ws://127.0.0.1:13773/",
+    });
+  });
+
   it("uses the current origin as the descriptor base for local dev environments", async () => {
     installTestBrowser("http://localhost:5735/");
     await installDescriptorApi();

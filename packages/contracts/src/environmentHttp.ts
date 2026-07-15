@@ -84,6 +84,7 @@ export const EnvironmentInternalErrorReason = Schema.Literals([
   "orchestration_snapshot_failed",
   "orchestration_thread_snapshot_failed",
   "orchestration_dispatch_failed",
+  "latitude_project_ensure_failed",
   "internal_error",
 ]);
 export type EnvironmentInternalErrorReason = typeof EnvironmentInternalErrorReason.Type;
@@ -356,6 +357,20 @@ export const EnvironmentCloudPreferencesRequest = Schema.Struct({
 });
 export type EnvironmentCloudPreferencesRequest = typeof EnvironmentCloudPreferencesRequest.Type;
 
+export const LatitudeProjectEnsureRequest = Schema.Struct({
+  projectDir: TrimmedNonEmptyString,
+  preferredName: TrimmedNonEmptyString,
+  theme: Schema.Literals(["light", "dark"]),
+});
+export type LatitudeProjectEnsureRequest = typeof LatitudeProjectEnsureRequest.Type;
+
+export const LatitudeProjectEnsureResult = Schema.Struct({
+  name: TrimmedNonEmptyString,
+  publicUrl: TrimmedNonEmptyString,
+  created: Schema.Boolean,
+});
+export type LatitudeProjectEnsureResult = typeof LatitudeProjectEnsureResult.Type;
+
 export const AuthPairingLinkRevokeResult = Schema.Struct({
   revoked: Schema.Boolean,
 });
@@ -478,6 +493,14 @@ export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestr
       params: EnvironmentOrchestrationThreadSnapshotParams,
       success: OrchestrationThreadDetailSnapshot,
       error: EnvironmentOrchestrationThreadSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("ensureLatitudeProject", "/api/integrations/latitude/projects/ensure", {
+      headers: OptionalBearerHeaders,
+      payload: LatitudeProjectEnsureRequest,
+      success: LatitudeProjectEnsureResult,
+      error: EnvironmentScopedOperationErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
   )
   .add(

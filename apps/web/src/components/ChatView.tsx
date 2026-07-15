@@ -54,6 +54,7 @@ import {
   useState,
 } from "react";
 import { flushSync } from "react-dom";
+/* oxlint-disable react/iframe-missing-sandbox -- Latitude is cross-origin, and its authenticated UI requires both scripts and same-origin cookie access. */
 import { useNavigate } from "@tanstack/react-router";
 import { useShallow } from "zustand/react/shallow";
 import {
@@ -64,6 +65,7 @@ import {
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
 import * as Cause from "effect/Cause";
+import * as Effect from "effect/Effect";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { isElectron } from "../env";
 import { readLocalApi } from "../localApi";
@@ -181,6 +183,8 @@ import {
 import { appendPreviewAnnotationPrompt } from "../lib/previewAnnotation";
 import { appendReviewCommentsToPrompt, type ReviewCommentContext } from "../reviewCommentContext";
 import { environmentCatalog } from "../connection/catalog";
+import { PrimaryEnvironmentHttpClient } from "../environments/primary/httpClient";
+import { runPrimaryHttp } from "../lib/runtime";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { useKnownTerminalSessions, useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { projectEnvironment } from "../state/projects";
@@ -1422,6 +1426,7 @@ function ChatViewContent(props: ChatViewProps) {
     [activeThread],
   );
   const activeThreadKey = activeThreadRef ? scopedThreadKey(activeThreadRef) : null;
+  const [latitudeUrlByThreadKey, setLatitudeUrlByThreadKey] = useState<Record<string, string>>({});
   const [timelineAnchor, setTimelineAnchor] = useState<{
     readonly threadKey: string | null;
     readonly messageId: MessageId | null;
@@ -2926,6 +2931,49 @@ function ChatViewContent(props: ChatViewProps) {
     if (!activeThreadRef || !activeProject) return;
     useRightPanelStore.getState().open(activeThreadRef, "files");
   }, [activeProject, activeThreadRef]);
+  const addLatitudeSurface = useCallback(() => {
+    if (!activeThreadRef || !activeProject) return;
+    void runPrimaryHttp(
+      PrimaryEnvironmentHttpClient.pipe(
+        Effect.flatMap((client) =>
+          client.orchestration.ensureLatitudeProject({
+            headers: {},
+            payload: {
+              projectDir: activeProject.workspaceRoot,
+              preferredName: activeProject.title,
+              theme: resolvedTheme,
+            },
+          }),
+        ),
+      ),
+    )
+      .then((latitude) => {
+        if (isPreviewSupportedInRuntime()) {
+          return addBrowserSurface({
+            threadRef: activeThreadRef,
+            openPreview,
+            url: latitude.publicUrl,
+          });
+        }
+        const threadKey = scopedThreadKey(activeThreadRef);
+        const iframeUrl = new URL(latitude.publicUrl);
+        // Latitude listens beside the T3 server. Reusing the page hostname keeps local/LAN web
+        // sessions on the correct machine and makes the auth/theme cookies same-site.
+        iframeUrl.hostname = window.location.hostname;
+        setLatitudeUrlByThreadKey((current) => ({
+          ...current,
+          [threadKey]: iframeUrl.toString(),
+        }));
+        useRightPanelStore.getState().openLatitude(activeThreadRef);
+      })
+      .catch(() => {
+        toastManager.add({
+          title: "Latitude is unavailable",
+          description: "Start Latitude locally, then try opening the tab again.",
+          type: "error",
+        });
+      });
+  }, [activeProject, activeThreadRef, openPreview, resolvedTheme]);
   const openFileSurface = useCallback(
     (relativePath: string) => {
       if (!activeThreadRef || !activeProject) return;
@@ -5113,7 +5161,28 @@ function ChatViewContent(props: ChatViewProps) {
     </div>
   );
   const rightPanelContent = activeThreadRef ? (
-    activeRightPanelSurface?.kind === "preview" ? (
+    activeRightPanelSurface?.kind === "latitude" ? (
+      activeThreadKey && latitudeUrlByThreadKey[activeThreadKey] ? (
+        <iframe
+          src={latitudeUrlByThreadKey[activeThreadKey]}
+          title="Latitude"
+          className="min-h-0 w-full flex-1 border-0 bg-background"
+          allow="clipboard-read; clipboard-write"
+          sandbox="allow-downloads allow-forms allow-modals allow-popups allow-same-origin allow-scripts"
+          referrerPolicy="no-referrer"
+        />
+      ) : (
+        <div className="flex min-h-0 flex-1 items-center justify-center p-6">
+          <button
+            type="button"
+            className="rounded-md border border-border bg-card px-4 py-2 text-sm hover:bg-accent"
+            onClick={addLatitudeSurface}
+          >
+            Reconnect Latitude
+          </button>
+        </div>
+      )
+    ) : activeRightPanelSurface?.kind === "preview" ? (
       <Suspense fallback={null}>
         <PreviewPanel
           mode="embedded"
@@ -5549,9 +5618,11 @@ function ChatViewContent(props: ChatViewProps) {
           onAddTerminal={addTerminalSurface}
           onAddDiff={addDiffSurface}
           onAddFiles={addFilesSurface}
+          onAddLatitude={addLatitudeSurface}
           browserAvailable={isPreviewSupportedInRuntime()}
           diffAvailable={isServerThread && isGitRepo}
           filesAvailable={activeProject !== null}
+          latitudeAvailable={activeProject !== null}
         >
           {rightPanelContent}
         </RightPanelTabs>
@@ -5576,9 +5647,11 @@ function ChatViewContent(props: ChatViewProps) {
             onAddTerminal={addTerminalSurface}
             onAddDiff={addDiffSurface}
             onAddFiles={addFilesSurface}
+            onAddLatitude={addLatitudeSurface}
             browserAvailable={isPreviewSupportedInRuntime()}
             diffAvailable={isServerThread && isGitRepo}
             filesAvailable={activeProject !== null}
+            latitudeAvailable={activeProject !== null}
           >
             {rightPanelContent}
           </RightPanelTabs>

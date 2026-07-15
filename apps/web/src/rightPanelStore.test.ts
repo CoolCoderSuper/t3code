@@ -142,6 +142,16 @@ describe("rightPanelStore", () => {
     });
   });
 
+  it("keeps Latitude as a singleton web surface", () => {
+    useRightPanelStore.getState().openLatitude(refA);
+    useRightPanelStore.getState().openLatitude(refA);
+    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      isOpen: true,
+      activeSurfaceId: "latitude",
+      surfaces: [{ id: "latitude", kind: "latitude" }],
+    });
+  });
+
   it("replaces the standalone explorer with peer file surfaces", () => {
     useRightPanelStore.getState().open(refA, "files");
     useRightPanelStore.getState().openFile(refA, "src/index.ts");

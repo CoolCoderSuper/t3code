@@ -200,11 +200,60 @@ function resolveConfiguredPrimaryTarget(): PrimaryEnvironmentTarget | null {
       ? swapBaseUrlProtocol(configuredHttpBaseUrl, "wss:", "http-base-url")
       : swapBaseUrlProtocol(configuredHttpBaseUrl!, "ws:", "http-base-url"));
 
-  return {
+  const configuredTarget = {
     source: "configured",
     target: {
       httpBaseUrl: normalizeBaseUrl(resolvedHttpBaseUrl, "configured", "http-base-url"),
       wsBaseUrl: normalizeBaseUrl(resolvedWsBaseUrl, "configured", "websocket-base-url"),
+    },
+  } satisfies PrimaryEnvironmentTarget;
+
+  return rebindLoopbackTargetToWindowHost(configuredTarget);
+}
+
+function rebindLoopbackTargetToWindowHost(
+  primaryTarget: PrimaryEnvironmentTarget,
+): PrimaryEnvironmentTarget {
+  if (window.desktopBridge !== undefined || window.nativeApi !== undefined) {
+    return primaryTarget;
+  }
+
+  const currentUrl = parseTargetUrl({
+    rawValue: window.location.href,
+    source: "window-origin",
+    urlKind: "window-location-url",
+  });
+  const httpUrl = parseTargetUrl({
+    rawValue: primaryTarget.target.httpBaseUrl,
+    source: primaryTarget.source,
+    urlKind: "http-base-url",
+  });
+  const wsUrl = parseTargetUrl({
+    rawValue: primaryTarget.target.wsBaseUrl,
+    source: primaryTarget.source,
+    urlKind: "websocket-base-url",
+  });
+
+  if (
+    !["http:", "https:"].includes(currentUrl.protocol) ||
+    isLoopbackHostname(currentUrl.hostname) ||
+    !isLoopbackHostname(httpUrl.hostname) ||
+    !isLoopbackHostname(wsUrl.hostname) ||
+    currentUrl.port !== httpUrl.port
+  ) {
+    return primaryTarget;
+  }
+
+  httpUrl.protocol = currentUrl.protocol;
+  httpUrl.hostname = currentUrl.hostname;
+  wsUrl.protocol = currentUrl.protocol === "https:" ? "wss:" : "ws:";
+  wsUrl.hostname = currentUrl.hostname;
+
+  return {
+    ...primaryTarget,
+    target: {
+      httpBaseUrl: httpUrl.toString(),
+      wsBaseUrl: wsUrl.toString(),
     },
   };
 }
