@@ -38,9 +38,14 @@ function publicOrigin(bind: string): string {
   return `http://127.0.0.1:${port}`;
 }
 
-function comparablePath(value: string): string {
-  const normalized = value.trim().replaceAll("\\", "/").replace(/\/+$/, "");
-  return /^[a-z]:\//i.test(normalized) ? normalized.toLowerCase() : normalized;
+export function comparableLatitudePath(value: string): string {
+  let normalized = value.trim().replaceAll("\\", "/").replace(/\/+$/, "");
+  if (/^\/\/\?\/unc\//i.test(normalized)) {
+    normalized = `//${normalized.slice(8)}`;
+  } else if (normalized.startsWith("//?/")) {
+    normalized = normalized.slice(4);
+  }
+  return /^(?:[a-z]:\/|\/\/)/i.test(normalized) ? normalized.toLowerCase() : normalized;
 }
 
 export const ensureLatitudeProject = Effect.fn("Latitude.ensureProject")(function* (input: {
@@ -53,7 +58,8 @@ export const ensureLatitudeProject = Effect.fn("Latitude.ensureProject")(functio
     HttpClient.filterStatusOk,
   );
   const requestedDir = input.projectDir.trim();
-  const samePath = (value: string) => comparablePath(value) === comparablePath(requestedDir);
+  const samePath = (value: string) =>
+    comparableLatitudePath(value) === comparableLatitudePath(requestedDir);
   const projects = yield* client.get("/api/projects").pipe(
     Effect.flatMap(HttpClientResponse.schemaBodyJson(LatitudeProjects)),
     Effect.mapError((cause) => new LatitudeRequestError({ message: String(cause) })),

@@ -2932,14 +2932,14 @@ function ChatViewContent(props: ChatViewProps) {
     useRightPanelStore.getState().open(activeThreadRef, "files");
   }, [activeProject, activeThreadRef]);
   const addLatitudeSurface = useCallback(() => {
-    if (!activeThreadRef || !activeProject) return;
+    if (!activeThreadRef || !activeProject || !activeThread) return;
     void runPrimaryHttp(
       PrimaryEnvironmentHttpClient.pipe(
         Effect.flatMap((client) =>
           client.orchestration.ensureLatitudeProject({
             headers: {},
             payload: {
-              projectDir: activeProject.workspaceRoot,
+              projectDir: activeThread.worktreePath ?? activeProject.workspaceRoot,
               preferredName: activeProject.title,
               theme: resolvedTheme,
             },
@@ -2973,7 +2973,7 @@ function ChatViewContent(props: ChatViewProps) {
           type: "error",
         });
       });
-  }, [activeProject, activeThreadRef, openPreview, resolvedTheme]);
+  }, [activeProject, activeThread, activeThreadRef, openPreview, resolvedTheme]);
   const openFileSurface = useCallback(
     (relativePath: string) => {
       if (!activeThreadRef || !activeProject) return;
