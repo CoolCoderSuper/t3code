@@ -31,6 +31,7 @@ import {
   scopeProjectRef,
   scopeThreadRef,
 } from "@t3tools/client-runtime/environment";
+import { ensureEnvironmentLatitudeProject } from "@t3tools/client-runtime/operations";
 import {
   applyClaudePromptEffortPrefix,
   createModelSelection,
@@ -184,7 +185,9 @@ import { appendPreviewAnnotationPrompt } from "../lib/previewAnnotation";
 import { appendReviewCommentsToPrompt, type ReviewCommentContext } from "../reviewCommentContext";
 import { environmentCatalog } from "../connection/catalog";
 import { PrimaryEnvironmentHttpClient } from "../environments/primary/httpClient";
-import { runPrimaryHttp } from "../lib/runtime";
+import { runPrimaryHttp, runtime } from "../lib/runtime";
+import { resolveDiscoveredServerUrl } from "../browser/browserTargetResolver";
+import { readPreparedConnection } from "../state/session";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { useKnownTerminalSessions, useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { projectEnvironment } from "../state/projects";
@@ -2933,36 +2936,52 @@ function ChatViewContent(props: ChatViewProps) {
   }, [activeProject, activeThreadRef]);
   const addLatitudeSurface = useCallback(() => {
     if (!activeThreadRef || !activeProject || !activeThread) return;
-    void runPrimaryHttp(
-      PrimaryEnvironmentHttpClient.pipe(
-        Effect.flatMap((client) =>
-          client.orchestration.ensureLatitudeProject({
-            headers: {},
-            payload: {
-              projectDir: activeThread.worktreePath ?? activeProject.workspaceRoot,
-              preferredName: activeProject.title,
-              theme: resolvedTheme,
-            },
-          }),
-        ),
-      ),
-    )
+    const isPrimaryThread = activeThreadRef.environmentId === primaryEnvironmentId;
+    const payload = {
+      projectDir: activeThread.worktreePath ?? activeProject.workspaceRoot,
+      preferredName: activeProject.title,
+      theme: resolvedTheme,
+      ...(activeThread.worktreePath
+        ? {
+            workspaceRoot: activeProject.workspaceRoot,
+            ...(activeThread.branch ? { branch: activeThread.branch } : {}),
+          }
+        : {}),
+      ...(isPrimaryThread ? {} : { createIfMissing: false }),
+    } as const;
+    const latitudePromise = isPrimaryThread
+      ? runPrimaryHttp(
+          PrimaryEnvironmentHttpClient.pipe(
+            Effect.flatMap((client) =>
+              client.orchestration.ensureLatitudeProject({ headers: {}, payload }),
+            ),
+          ),
+        )
+      : (() => {
+          const prepared = readPreparedConnection(activeThreadRef.environmentId);
+          if (!prepared)
+            return Promise.reject(new Error("The remote environment is disconnected."));
+          return runtime.runPromise(
+            ensureEnvironmentLatitudeProject({ prepared, project: payload }),
+          );
+        })();
+    void latitudePromise
       .then((latitude) => {
+        const resolvedLatitudeUrl = resolveDiscoveredServerUrl(
+          activeThreadRef.environmentId,
+          latitude.publicUrl,
+        );
         if (isPreviewSupportedInRuntime()) {
           return addBrowserSurface({
             threadRef: activeThreadRef,
             openPreview,
-            url: latitude.publicUrl,
+            url: resolvedLatitudeUrl,
           });
         }
         const threadKey = scopedThreadKey(activeThreadRef);
-        const iframeUrl = new URL(latitude.publicUrl);
-        // Latitude listens beside the T3 server. Reusing the page hostname keeps local/LAN web
-        // sessions on the correct machine and makes the auth/theme cookies same-site.
-        iframeUrl.hostname = window.location.hostname;
         setLatitudeUrlByThreadKey((current) => ({
           ...current,
-          [threadKey]: iframeUrl.toString(),
+          [threadKey]: resolvedLatitudeUrl,
         }));
         useRightPanelStore.getState().openLatitude(activeThreadRef);
       })
@@ -2973,7 +2992,14 @@ function ChatViewContent(props: ChatViewProps) {
           type: "error",
         });
       });
-  }, [activeProject, activeThread, activeThreadRef, openPreview, resolvedTheme]);
+  }, [
+    activeProject,
+    activeThread,
+    activeThreadRef,
+    openPreview,
+    primaryEnvironmentId,
+    resolvedTheme,
+  ]);
   const openFileSurface = useCallback(
     (relativePath: string) => {
       if (!activeThreadRef || !activeProject) return;

@@ -108,6 +108,18 @@ describe("browser target resolver", () => {
     });
   });
 
+  it("maps a remote integration loopback URL onto its environment host", async () => {
+    readPreparedConnection.mockReturnValue({ httpBaseUrl: "http://192.168.1.25:3773" });
+    const { resolveDiscoveredServerUrl } = await import("./browserTargetResolver");
+
+    expect(
+      resolveDiscoveredServerUrl(
+        EnvironmentId.make("environment-1"),
+        "http://127.0.0.1:8080/embed/session?theme=dark",
+      ),
+    ).toBe("http://192.168.1.25:8080/embed/session?theme=dark");
+  });
+
   it("refuses public relay hosts until the authenticated gateway exists", async () => {
     readPreparedConnection.mockReturnValue({ httpBaseUrl: "https://relay.example.com" });
     const { resolveBrowserNavigationTarget } = await import("./browserTargetResolver");

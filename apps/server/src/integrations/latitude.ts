@@ -38,6 +38,12 @@ function publicOrigin(bind: string): string {
   return `http://127.0.0.1:${port}`;
 }
 
+interface LatitudeProjectLookup {
+  readonly projectDir: string;
+  readonly workspaceRoot?: string | undefined;
+  readonly branch?: string | undefined;
+}
+
 export function comparableLatitudePath(value: string): string {
   let normalized = value.trim().replaceAll("\\", "/").replace(/\/+$/, "");
   if (/^\/\/\?\/unc\//i.test(normalized)) {
@@ -48,27 +54,54 @@ export function comparableLatitudePath(value: string): string {
   return /^(?:[a-z]:\/|\/\/)/i.test(normalized) ? normalized.toLowerCase() : normalized;
 }
 
+export function findExistingLatitudeProject(
+  projects: ReadonlyArray<typeof LatitudeProject.Type>,
+  input: LatitudeProjectLookup,
+): typeof LatitudeProject.Type | undefined {
+  const requestedPath = comparableLatitudePath(input.projectDir);
+  const exact = projects.find(
+    (project) => comparableLatitudePath(project.project_dir) === requestedPath,
+  );
+  if (exact) return exact;
+
+  const workspaceRoot = input.workspaceRoot;
+  const branchLabel = input.branch?.split("/").at(-1);
+  if (!workspaceRoot || !branchLabel) return undefined;
+  const rootPath = comparableLatitudePath(workspaceRoot);
+  const rootProject = projects.find(
+    (project) => comparableLatitudePath(project.project_dir) === rootPath,
+  );
+  if (!rootProject) return undefined;
+  const expectedName = `${rootProject.name}--${projectName(branchLabel)}`;
+  return projects.find((project) => project.name.toLowerCase() === expectedName.toLowerCase());
+}
+
 export const ensureLatitudeProject = Effect.fn("Latitude.ensureProject")(function* (input: {
   readonly projectDir: string;
   readonly preferredName: string;
   readonly theme: "light" | "dark";
+  readonly workspaceRoot?: string | undefined;
+  readonly branch?: string | undefined;
+  readonly createIfMissing?: boolean | undefined;
 }) {
   const client = (yield* HttpClient.HttpClient).pipe(
     HttpClient.mapRequest(HttpClientRequest.prependUrl(COMMAND_URL)),
     HttpClient.filterStatusOk,
   );
   const requestedDir = input.projectDir.trim();
-  const samePath = (value: string) =>
-    comparableLatitudePath(value) === comparableLatitudePath(requestedDir);
   const projects = yield* client.get("/api/projects").pipe(
     Effect.flatMap(HttpClientResponse.schemaBodyJson(LatitudeProjects)),
     Effect.mapError((cause) => new LatitudeRequestError({ message: String(cause) })),
   );
-  const existing = projects.find((project) => samePath(project.project_dir));
-  let selected = existing;
+  let selected = findExistingLatitudeProject(projects, input);
   let created = false;
 
   if (!selected) {
+    if (input.createIfMissing === false) {
+      return yield* new LatitudeRequestError({
+        message: `Latitude project was not found for ${requestedDir}`,
+      });
+    }
     const baseName = projectName(input.preferredName);
     const usedNames = new Set(projects.map((project) => project.name));
     let name = baseName;

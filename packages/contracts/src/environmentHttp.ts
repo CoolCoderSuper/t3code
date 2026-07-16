@@ -361,6 +361,9 @@ export const LatitudeProjectEnsureRequest = Schema.Struct({
   projectDir: TrimmedNonEmptyString,
   preferredName: TrimmedNonEmptyString,
   theme: Schema.Literals(["light", "dark"]),
+  workspaceRoot: Schema.optional(TrimmedNonEmptyString),
+  branch: Schema.optional(TrimmedNonEmptyString),
+  createIfMissing: Schema.optional(Schema.Boolean),
 });
 export type LatitudeProjectEnsureRequest = typeof LatitudeProjectEnsureRequest.Type;
 
