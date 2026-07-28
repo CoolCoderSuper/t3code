@@ -89,6 +89,7 @@ function makeEnvironmentLayer(baseDir: string, env: Record<string, string | unde
 function makeLayer(input: {
   readonly baseDir: string;
   readonly networkInterfaces?: DesktopNetworkInterfaces.NetworkInterfaces;
+  readonly routedIpv4Address?: string | null;
   readonly env?: Record<string, string | undefined>;
   readonly spawnerLayer?: Layer.Layer<ChildProcessSpawner.ChildProcessSpawner>;
   readonly desktopSettingsLayer?: Layer.Layer<DesktopAppSettings.DesktopAppSettings>;
@@ -97,6 +98,7 @@ function makeLayer(input: {
   const environmentLayer = makeEnvironmentLayer(input.baseDir, env);
   const networkLayer = Layer.succeed(DesktopNetworkInterfaces.DesktopNetworkInterfaces, {
     read: Effect.succeed(input.networkInterfaces ?? emptyNetworkInterfaces),
+    readRoutedIpv4Address: Effect.succeed(input.routedIpv4Address ?? null),
   });
 
   return DesktopServerExposure.layer.pipe(
@@ -124,6 +126,7 @@ const withHarness = <A, E, R>(
   env: Record<string, string | undefined> = {},
   spawnerLayer?: Layer.Layer<ChildProcessSpawner.ChildProcessSpawner>,
   desktopSettingsLayer?: Layer.Layer<DesktopAppSettings.DesktopAppSettings>,
+  routedIpv4Address?: string | null,
 ) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
@@ -138,6 +141,7 @@ const withHarness = <A, E, R>(
           env,
           ...(spawnerLayer ? { spawnerLayer } : {}),
           ...(desktopSettingsLayer ? { desktopSettingsLayer } : {}),
+          ...(routedIpv4Address ? { routedIpv4Address } : {}),
         }),
       ),
     );
@@ -206,6 +210,40 @@ describe("DesktopServerExposure", () => {
         const persisted = yield* settings.get;
         assert.equal(persisted.serverExposureMode, "network-accessible");
       }),
+    ),
+  );
+
+  it.effect("prefers the IPv4 address selected by the host routing table", () =>
+    withHarness(
+      {
+        Hamachi: [
+          {
+            address: "25.43.47.198",
+            family: "IPv4",
+            internal: false,
+          },
+        ],
+        "vEthernet (External Switch)": [
+          {
+            address: "192.168.11.74",
+            family: "IPv4",
+            internal: false,
+          },
+        ],
+      },
+      Effect.gen(function* () {
+        const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
+        yield* serverExposure.configureFromSettings({ port: 3773 });
+
+        const change = yield* serverExposure.setMode("network-accessible");
+
+        assert.equal(change.state.advertisedHost, "192.168.11.74");
+        assert.equal(change.state.endpointUrl, "http://192.168.11.74:3773");
+      }),
+      {},
+      undefined,
+      undefined,
+      "192.168.11.74",
     ),
   );
 
