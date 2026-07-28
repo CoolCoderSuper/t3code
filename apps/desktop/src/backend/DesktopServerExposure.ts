@@ -80,12 +80,14 @@ const isHttpsEndpointUrl = (value: string): boolean => {
 const resolveLanAdvertisedHost = (
   networkInterfaces: DesktopNetworkInterfaces.NetworkInterfaces,
   explicitHost: string | undefined,
+  routedIpv4Address: string | null,
 ): string | null => {
   const normalizedExplicitHost = normalizeOptionalHost(explicitHost);
   if (normalizedExplicitHost) {
     return normalizedExplicitHost;
   }
 
+  let fallbackAddress: string | null = null;
   for (const interfaceAddresses of Object.values(networkInterfaces)) {
     if (!interfaceAddresses) continue;
 
@@ -93,11 +95,12 @@ const resolveLanAdvertisedHost = (
       if (address.internal) continue;
       if (address.family !== "IPv4") continue;
       if (!isUsableLanIpv4Address(address.address)) continue;
-      return address.address;
+      if (address.address === routedIpv4Address) return address.address;
+      fallbackAddress ??= address.address;
     }
   }
 
-  return null;
+  return fallbackAddress;
 };
 
 const resolveDesktopServerExposure = (input: {
@@ -105,6 +108,7 @@ const resolveDesktopServerExposure = (input: {
   readonly port: number;
   readonly networkInterfaces: DesktopNetworkInterfaces.NetworkInterfaces;
   readonly advertisedHostOverride?: string;
+  readonly routedIpv4Address: string | null;
 }): ResolvedDesktopServerExposure => {
   const localHttpUrl = `http://${DESKTOP_LOOPBACK_HOST}:${input.port}`;
   const localWsUrl = `ws://${DESKTOP_LOOPBACK_HOST}:${input.port}`;
@@ -123,6 +127,7 @@ const resolveDesktopServerExposure = (input: {
   const advertisedHost = resolveLanAdvertisedHost(
     input.networkInterfaces,
     input.advertisedHostOverride,
+    input.routedIpv4Address,
   );
 
   return {
@@ -313,6 +318,7 @@ const initialRuntimeState = (): RuntimeState =>
       mode: DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS.serverExposureMode,
       port: 0,
       networkInterfaces: {},
+      routedIpv4Address: null,
     }),
     port: 0,
   });
@@ -369,12 +375,14 @@ function resolveRuntimeState(input: {
   readonly port: number;
   readonly networkInterfaces: DesktopNetworkInterfaces.NetworkInterfaces;
   readonly advertisedHostOverride: Option.Option<string>;
+  readonly routedIpv4Address: string | null;
 }): ResolvedRuntimeState {
   const advertisedHostOverride = Option.getOrUndefined(input.advertisedHostOverride);
   const requestedExposure = resolveDesktopServerExposure({
     mode: input.requestedMode,
     port: input.port,
     networkInterfaces: input.networkInterfaces,
+    routedIpv4Address: input.routedIpv4Address,
     ...(advertisedHostOverride ? { advertisedHostOverride } : {}),
   });
   const unavailable =
@@ -391,6 +399,7 @@ function resolveRuntimeState(input: {
         mode: "local-only",
         port: input.port,
         networkInterfaces: input.networkInterfaces,
+        routedIpv4Address: input.routedIpv4Address,
         ...(advertisedHostOverride ? { advertisedHostOverride } : {}),
       })
     : requestedExposure;
@@ -433,6 +442,7 @@ export const make = Effect.gen(function* () {
   );
 
   const readNetworkInterfaces = networkInterfaces.read;
+  const readRoutedIpv4Address = networkInterfaces.readRoutedIpv4Address;
 
   const getState = Ref.get(stateRef).pipe(Effect.map(toContractState));
   const backendConfig = Ref.get(stateRef).pipe(Effect.map(toBackendConfig));
@@ -442,11 +452,13 @@ export const make = Effect.gen(function* () {
       yield* Effect.annotateCurrentSpan({ port });
       const settings = yield* desktopSettings.get;
       const currentNetworkInterfaces = yield* readNetworkInterfaces;
+      const routedIpv4Address = yield* readRoutedIpv4Address;
       const resolved = resolveRuntimeState({
         requestedMode: settings.serverExposureMode,
         settings,
         port,
         networkInterfaces: currentNetworkInterfaces,
+        routedIpv4Address,
         advertisedHostOverride: config.desktopLanHostOverride,
       });
       yield* Ref.set(stateRef, resolved.state);
@@ -465,11 +477,13 @@ export const make = Effect.gen(function* () {
       serverExposureMode: mode,
     };
     const currentNetworkInterfaces = yield* readNetworkInterfaces;
+    const routedIpv4Address = yield* readRoutedIpv4Address;
     const resolved = resolveRuntimeState({
       requestedMode: mode,
       settings: nextSettings,
       port: previous.port,
       networkInterfaces: currentNetworkInterfaces,
+      routedIpv4Address,
       advertisedHostOverride: config.desktopLanHostOverride,
     });
 
