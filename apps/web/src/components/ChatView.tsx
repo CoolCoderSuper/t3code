@@ -102,6 +102,7 @@ import {
   useState,
 } from "react";
 import { flushSync } from "react-dom";
+/* oxlint-disable react/iframe-missing-sandbox -- Latitude is cross-origin, and its authenticated UI requires both scripts and same-origin cookie access. */
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
 import { assistantCitationFromLocation } from "../lib/assistantCitationNavigation";
@@ -116,6 +117,7 @@ import {
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
 import * as Cause from "effect/Cause";
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { isElectron } from "../env";
@@ -336,6 +338,11 @@ import { type ReviewCommentContext } from "../reviewCommentContext";
 import { environmentCatalog } from "../connection/catalog";
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { useEnvironmentDisconnectDelay } from "../hooks/useEnvironmentDisconnectDelay";
+import { PrimaryEnvironmentHttpClient } from "../environments/primary/httpClient";
+import { runPrimaryHttp } from "../lib/runtime";
+import { ensureLatitudeProjectCommand } from "../state/latitude";
+import { resolveDiscoveredServerUrl } from "../browser/browserTargetResolver";
+import { readPreparedConnection } from "../state/session";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { useKnownTerminalSessions, useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { useEnvironmentQuery } from "../state/query";
@@ -496,7 +503,6 @@ import { clampFileAttachmentUploadBytes } from "@t3tools/client-runtime/state/at
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { fileAttachmentCapabilityBlockReason } from "./chat/composerAttachmentFiles";
 import { assetEnvironment } from "../state/assets";
-import { readPreparedConnection } from "../state/session";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { Button } from "./ui/button";
@@ -2000,6 +2006,7 @@ export default function ChatView(props: ChatViewProps) {
   );
   const activeThreadKey = activeThreadRef ? scopedThreadKey(activeThreadRef) : null;
   const activeThreadShell = useThreadShell(isServerThread ? activeThreadRef : null);
+  const [latitudeUrlByThreadKey, setLatitudeUrlByThreadKey] = useState<Record<string, string>>({});
   const [timelineAnchor, setTimelineAnchor] = useState<{
     readonly threadKey: string | null;
     readonly messageId: MessageId | null;
@@ -4562,6 +4569,75 @@ export default function ChatView(props: ChatViewProps) {
     if (!activeThreadRef || !activeProject) return;
     useRightPanelStore.getState().open(activeThreadRef, "files");
   }, [activeProject, activeThreadRef]);
+  const ensureRemoteLatitudeProject = useAtomCommand(ensureLatitudeProjectCommand);
+  const addLatitudeSurface = useCallback(() => {
+    if (!activeThreadRef || !activeProject || !activeThread) return;
+    const isPrimaryThread = activeThreadRef.environmentId === primaryEnvironmentId;
+    const payload = {
+      projectDir: activeThread.worktreePath ?? activeProject.workspaceRoot,
+      preferredName: activeProject.title,
+      theme: resolvedTheme,
+      ...(activeThread.worktreePath
+        ? {
+            workspaceRoot: activeProject.workspaceRoot,
+            ...(activeThread.branch ? { branch: activeThread.branch } : {}),
+          }
+        : {}),
+      ...(isPrimaryThread ? {} : { createIfMissing: false }),
+    } as const;
+    const latitudePromise = isPrimaryThread
+      ? runPrimaryHttp(
+          PrimaryEnvironmentHttpClient.pipe(
+            Effect.flatMap((client) =>
+              client.orchestration.ensureLatitudeProject({ headers: {}, payload }),
+            ),
+          ),
+        )
+      : (() => {
+          const prepared = readPreparedConnection(activeThreadRef.environmentId);
+          if (!prepared)
+            return Promise.reject(new Error("The remote environment is disconnected."));
+          return ensureRemoteLatitudeProject({ prepared, project: payload }).then((result) => {
+            if (result._tag === "Failure") throw new Error("Could not open Latitude.");
+            return result.value;
+          });
+        })();
+    void latitudePromise
+      .then((latitude) => {
+        const resolvedLatitudeUrl = resolveDiscoveredServerUrl(
+          activeThreadRef.environmentId,
+          latitude.publicUrl,
+        );
+        if (isPreviewSupportedInRuntime()) {
+          return addBrowserSurface({
+            threadRef: activeThreadRef,
+            openPreview,
+            url: resolvedLatitudeUrl,
+          });
+        }
+        const threadKey = scopedThreadKey(activeThreadRef);
+        setLatitudeUrlByThreadKey((current) => ({
+          ...current,
+          [threadKey]: resolvedLatitudeUrl,
+        }));
+        useRightPanelStore.getState().openLatitude(activeThreadRef);
+      })
+      .catch(() => {
+        toastManager.add({
+          title: "Latitude is unavailable",
+          description: "Start Latitude locally, then try opening the tab again.",
+          type: "error",
+        });
+      });
+  }, [
+    activeProject,
+    activeThread,
+    activeThreadRef,
+    openPreview,
+    primaryEnvironmentId,
+    resolvedTheme,
+    ensureRemoteLatitudeProject,
+  ]);
   const addAgentsSurface = useCallback(() => {
     if (!activeThreadRef) return;
     useRightPanelStore.getState().open(activeThreadRef, "agents");
@@ -9530,7 +9606,28 @@ export default function ChatView(props: ChatViewProps) {
     </div>
   );
   const rightPanelContent = activeThreadRef ? (
-    renderedRightPanelSurface?.kind === "preview" ? (
+    renderedRightPanelSurface?.kind === "latitude" ? (
+      activeThreadKey && latitudeUrlByThreadKey[activeThreadKey] ? (
+        <iframe
+          src={latitudeUrlByThreadKey[activeThreadKey]}
+          title="Latitude"
+          className="min-h-0 w-full flex-1 border-0 bg-background"
+          allow="clipboard-read; clipboard-write"
+          sandbox="allow-downloads allow-forms allow-modals allow-popups allow-same-origin allow-scripts"
+          referrerPolicy="no-referrer"
+        />
+      ) : (
+        <div className="flex min-h-0 flex-1 items-center justify-center p-6">
+          <button
+            type="button"
+            className="rounded-md border border-border bg-card px-4 py-2 text-sm hover:bg-accent"
+            onClick={addLatitudeSurface}
+          >
+            Reconnect Latitude
+          </button>
+        </div>
+      )
+    ) : renderedRightPanelSurface?.kind === "preview" ? (
       <Suspense fallback={null}>
         <PreviewPanel
           mode="embedded"
@@ -10284,6 +10381,7 @@ export default function ChatView(props: ChatViewProps) {
           onAddTerminal={addTerminalSurface}
           onAddDiff={addDiffSurface}
           onAddFiles={addFilesSurface}
+          onAddLatitude={addLatitudeSurface}
           onAddPullRequest={addPullRequestSurface}
           onAddPullRequests={addPullRequestsSurface}
           onAddAgents={addAgentsSurface}
@@ -10292,6 +10390,7 @@ export default function ChatView(props: ChatViewProps) {
           terminalAvailable={activeProject !== null}
           diffAvailable={isServerThread && isGitRepo}
           filesAvailable={activeProject !== null}
+          latitudeAvailable={activeProject !== null}
           pullRequestAvailable={pullRequestSurfaceAvailable}
           pullRequestsAvailable={pullRequestsSurfaceAvailable}
           agentsAvailable
@@ -10341,6 +10440,7 @@ export default function ChatView(props: ChatViewProps) {
             onAddTerminal={addTerminalSurface}
             onAddDiff={addDiffSurface}
             onAddFiles={addFilesSurface}
+            onAddLatitude={addLatitudeSurface}
             onAddPullRequest={addPullRequestSurface}
             onAddPullRequests={addPullRequestsSurface}
             onAddAgents={addAgentsSurface}
@@ -10349,6 +10449,7 @@ export default function ChatView(props: ChatViewProps) {
             terminalAvailable={activeProject !== null}
             diffAvailable={isServerThread && isGitRepo}
             filesAvailable={activeProject !== null}
+            latitudeAvailable={activeProject !== null}
             pullRequestAvailable={pullRequestSurfaceAvailable}
             pullRequestsAvailable={pullRequestsSurfaceAvailable}
             agentsAvailable

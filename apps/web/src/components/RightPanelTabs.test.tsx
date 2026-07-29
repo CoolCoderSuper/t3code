@@ -124,6 +124,8 @@ function renderTabs(
       onAddFiles={() => undefined}
       onAddAgents={() => undefined}
       onAddDevice={() => undefined}
+      onAddLatitude={() => undefined}
+      latitudeAvailable={false}
       liveAgentCount={0}
       browserAvailable
       terminalAvailable={false}
