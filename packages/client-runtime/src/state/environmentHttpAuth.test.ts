@@ -17,6 +17,7 @@ import { TestClock } from "effect/testing";
 import type { HttpClient } from "effect/unstable/http";
 
 import { RemoteEnvironmentAuthorization } from "../authorization/service.ts";
+import { ensureEnvironmentLatitudeProject } from "../operations/latitude.ts";
 import {
   ConnectionTransientError,
   RelayConnectionTarget,
@@ -165,6 +166,43 @@ function makeHarness(reply: (requestNumber: number) => Response | Promise<Respon
 }
 
 type HttpInput = ReturnType<typeof makeHarness>["input"];
+it.effect("refreshes Latitude relay credentials and signs the retried POST", () =>
+  Effect.gen(function* () {
+    const response = {
+      name: "project",
+      publicUrl: "http://127.0.0.1:8080/project",
+      created: false,
+    };
+    const harness = makeHarness((attempt) =>
+      attempt === 1 ? credentialRejectedResponse() : Response.json(response),
+    );
+    const result = yield* ensureEnvironmentLatitudeProject({
+      prepared: PREPARED,
+      project: {
+        projectDir: "/workspace",
+        preferredName: "project",
+        theme: "dark",
+        createIfMissing: false,
+      },
+    }).pipe(
+      Effect.provideService(RemoteEnvironmentAuthorization, harness.remoteAuthorization),
+      Effect.provideService(ManagedRelayDpopSigner, Option.getOrThrow(harness.input.signer)),
+      Effect.provide(harness.httpLayer),
+    );
+    expect(result).toEqual(response);
+    expect(harness.calls.map((call) => call.url)).toEqual([
+      `${CURRENT_ORIGIN}/api/integrations/latitude/projects/ensure`,
+      `${RENEWED_ORIGIN}/api/integrations/latitude/projects/ensure`,
+    ]);
+    expect(
+      harness.proofs.map((proof) => ({ method: proof.method, accessToken: proof.accessToken })),
+    ).toEqual([
+      { method: "POST", accessToken: "current-token" },
+      { method: "POST", accessToken: "renewed-token" },
+    ]);
+  }),
+);
+
 const LOADERS: ReadonlyArray<{
   readonly name: string;
   readonly method: string;

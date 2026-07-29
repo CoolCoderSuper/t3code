@@ -16,6 +16,7 @@ import {
   failEnvironmentNotFound,
   requireEnvironmentScope,
 } from "../auth/http.ts";
+import { ensureLatitudeProject } from "../integrations/latitude.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
 
@@ -86,6 +87,18 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
             return yield* failEnvironmentNotFound("thread_not_found");
           }
           return projectThreadDetailSnapshot(snapshot.value);
+        }),
+      )
+      .handle(
+        "ensureLatitudeProject",
+        Effect.fn("environment.integrations.latitude.ensureProject")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+          return yield* ensureLatitudeProject(args.payload).pipe(
+            Effect.catch((cause) =>
+              failEnvironmentInternal("latitude_project_ensure_failed", cause),
+            ),
+          );
         }),
       )
       .handle(

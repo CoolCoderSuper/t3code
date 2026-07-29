@@ -1924,6 +1924,8 @@ function PullRequestsRouteView() {
             onAddFiles={() => undefined}
             onAddPullRequest={() => undefined}
             onAddAgents={() => undefined}
+            onAddLatitude={() => undefined}
+            latitudeAvailable={false}
             browserAvailable={false}
             terminalAvailable={false}
             diffAvailable={false}

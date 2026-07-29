@@ -15,6 +15,7 @@ import {
   Files,
   GitPullRequest,
   Globe2,
+  Map,
   Plus,
   TerminalSquare,
   Volume2,
@@ -103,12 +104,14 @@ interface RightPanelTabsProps {
   onAddTerminal: () => void;
   onAddDiff: () => void;
   onAddFiles: () => void;
+  onAddLatitude: () => void;
   onAddPullRequest: () => void;
   onAddAgents: () => void;
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
   filesAvailable: boolean;
+  latitudeAvailable: boolean;
   pullRequestAvailable: boolean;
   agentsAvailable: boolean;
   pullRequestStatusSeeds?: Readonly<Record<string, PullRequestTabStatusSeed>>;
@@ -297,12 +300,14 @@ function RightPanelEmptyState(props: {
   onAddTerminal: () => void;
   onAddDiff: () => void;
   onAddFiles: () => void;
+  onAddLatitude: () => void;
   onAddPullRequest: () => void;
   onAddAgents: () => void;
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
   filesAvailable: boolean;
+  latitudeAvailable: boolean;
   pullRequestAvailable: boolean;
   agentsAvailable: boolean;
   liveAgentCount: number;
@@ -339,6 +344,16 @@ function RightPanelEmptyState(props: {
       available: props.filesAvailable,
       disabledReason: SURFACE_UNAVAILABLE_HINTS.files,
       onClick: props.onAddFiles,
+      badgeCount: 0,
+    },
+    {
+      label: "Latitude",
+      description: "Open this workspace in Latitude.",
+      icon: Map,
+      shortcut: "L",
+      available: props.latitudeAvailable,
+      disabledReason: "Latitude requires an open project.",
+      onClick: props.onAddLatitude,
       badgeCount: 0,
     },
     {
@@ -604,6 +619,8 @@ function surfaceTitle(
       return `#${surface.number}`;
     case "agents":
       return "Agents";
+    case "latitude":
+      return "Latitude";
     case "preview": {
       const snapshot = surface.resourceId ? sessions[surface.resourceId] : null;
       if (!snapshot || snapshot.navStatus._tag === "Idle") return "Browser";
@@ -685,6 +702,8 @@ function SurfaceIcon({
       );
     case "agents":
       return <Bot className="size-3 shrink-0" />;
+    case "latitude":
+      return <Map className="size-3 shrink-0" />;
   }
 }
 
@@ -789,6 +808,14 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       available: props.filesAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.files,
       onClick: props.onAddFiles,
+    },
+    {
+      label: "Latitude",
+      icon: Map,
+      shortcut: "L",
+      available: props.latitudeAvailable,
+      disabledReason: "Latitude requires an open project.",
+      onClick: props.onAddLatitude,
     },
     {
       label: "Diff",
@@ -1249,12 +1276,14 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddTerminal={props.onAddTerminal}
             onAddDiff={props.onAddDiff}
             onAddFiles={props.onAddFiles}
+            onAddLatitude={props.onAddLatitude}
             onAddPullRequest={props.onAddPullRequest}
             onAddAgents={props.onAddAgents}
             browserAvailable={props.browserAvailable}
             terminalAvailable={props.terminalAvailable}
             diffAvailable={props.diffAvailable}
             filesAvailable={props.filesAvailable}
+            latitudeAvailable={props.latitudeAvailable}
             pullRequestAvailable={props.pullRequestAvailable}
             agentsAvailable={props.agentsAvailable}
             liveAgentCount={props.liveAgentCount}
