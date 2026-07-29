@@ -8,6 +8,7 @@ import {
   PairingRouteSurface,
 } from "../components/auth/PairingRouteSurface";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
+import { readPairLaunchContext } from "../pairLaunchContext";
 import { useProjects } from "../state/entities";
 
 export const Route = createFileRoute("/pair")({
@@ -21,7 +22,8 @@ export const Route = createFileRoute("/pair")({
 
     if (
       authGateState.status === "hosted-static" ||
-      (authGateState.status === "authenticated" && readLaunchProjectId() === null)
+      (authGateState.status === "authenticated" &&
+        readPairLaunchContext(window.location.hash) === null)
     ) {
       throw redirect({ to: "/", replace: true });
     }
@@ -38,8 +40,8 @@ function PairRouteView() {
   const navigate = useNavigate();
   const handleNewThread = useNewThreadHandler();
   const projects = useProjects();
-  const launchProjectId = useRef(readLaunchProjectId()).current;
-  const launchProject = projects.find((project) => project.id === launchProjectId);
+  const launchContext = useRef(readPairLaunchContext(window.location.hash)).current;
+  const launchProject = projects.find((project) => project.id === launchContext?.projectId);
   const didLaunchAuthenticatedProject = useRef(false);
 
   useEffect(() => {
@@ -51,8 +53,13 @@ function PairRouteView() {
       return;
     }
     didLaunchAuthenticatedProject.current = true;
-    void handleNewThread(scopeProjectRef(launchProject.environmentId, launchProject.id));
-  }, [authGateState?.status, handleNewThread, launchProject]);
+    void handleNewThread(scopeProjectRef(launchProject.environmentId, launchProject.id), {
+      ...(launchContext?.branch ? { branch: launchContext.branch } : {}),
+      ...(launchContext?.worktreePath
+        ? { worktreePath: launchContext.worktreePath, envMode: "worktree" }
+        : {}),
+    });
+  }, [authGateState?.status, handleNewThread, launchContext, launchProject]);
 
   if (!authGateState) {
     return null;
@@ -70,7 +77,7 @@ function PairRouteView() {
     <PairingRouteSurface
       auth={authGateState.auth}
       onAuthenticated={() => {
-        if (launchProjectId) {
+        if (launchContext?.projectId) {
           window.location.reload();
           return;
         }
@@ -79,14 +86,6 @@ function PairRouteView() {
       {...(authGateState.errorMessage ? { initialErrorMessage: authGateState.errorMessage } : {})}
     />
   );
-}
-
-function readLaunchProjectId(): string | null {
-  const hash = window.location.hash.startsWith("#")
-    ? window.location.hash.slice(1)
-    : window.location.hash;
-  const projectId = new URLSearchParams(hash).get("project")?.trim() ?? "";
-  return projectId.length > 0 ? projectId : null;
 }
 
 function PairRoutePendingView() {
