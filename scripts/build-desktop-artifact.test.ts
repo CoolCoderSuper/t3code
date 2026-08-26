@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - Tests use Node's glob matcher to verify electron-builder exclusions.
 import * as NodeCrypto from "node:crypto";
+import * as NodeChildProcess from "node:child_process";
 import * as NodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -44,6 +45,7 @@ import {
   preflightMacDesktopBuild,
   preflightWindowsDesktopBuild,
   renderMacPasskeyEntitlements,
+  renderBundleResolutionGuard,
   resolveClerkPasskeyNativeArtifacts,
   resolveMacPasskeySigningConfiguration,
   resolveDesktopRuntimeDependencies,
@@ -68,7 +70,6 @@ import {
   stageWslRuntimeArchive,
   bundlesWslRuntime,
   STAGE_INSTALL_ARGS,
-  ancestorNodeModulesPaths,
   copyDirectoryPreservingSymlinks,
   LinuxBrowserSecretHostError,
   stageBrowserSecret,
@@ -1124,13 +1125,15 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
               stageResourcesDir,
               arch,
               verbose: false,
-            }).pipe(Effect.provide(spawner));
+            }).pipe(Effect.provide(spawner), Effect.provideService(HostProcessPlatform, "linux"));
             const installed = path.join(
               stageResourcesDir,
               `${backend}-capture/t3-${backend}-snap-shot`,
             );
             assert.equal(yield* fs.readFileString(installed), `helper-${arch}`);
-            assert.equal((yield* fs.stat(installed)).mode & 0o777, 0o755);
+            if ((yield* HostProcessPlatform) !== "win32") {
+              assert.equal((yield* fs.stat(installed)).mode & 0o777, 0o755);
+            }
             if (backend === "hyprland")
               assert.equal(
                 yield* fs.readFileString(
@@ -1421,7 +1424,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         });
 
         assert.isFalse(
-          commands.some((command) => command.options.env?.ELECTRON_RUN_AS_NODE === "1"),
+          commands.some((command) => command.command.endsWith(fixture.appExecutableName)),
         );
         assert.isTrue(
           commands.some(
@@ -2270,36 +2273,6 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
   );
 });
 
-// The self-containment check runs the packaged tree in a scratch directory. Its
-// own node_modules holds the sidecar externals and must be ignored, but any
-// node_modules *above* it would let Node's parent walk satisfy an import that is
-// missing from the package, so the probe refuses to run in that case.
-it("lists ancestor node_modules, nearest first, excluding the start directory", () => {
-  assert.deepStrictEqual(ancestorNodeModulesPaths("C:\\tmp\\probe\\app", "\\"), [
-    "C:\\tmp\\probe\\node_modules",
-    "C:\\tmp\\node_modules",
-    "C:\\node_modules",
-  ]);
-});
-
-it("includes the filesystem root for posix paths", () => {
-  assert.deepStrictEqual(ancestorNodeModulesPaths("/tmp/probe", "/"), [
-    "/tmp/node_modules",
-    "/node_modules",
-  ]);
-});
-
-// A UNC root must keep its \\server\share prefix. Rebuilding it from segments
-// produced relative paths, which fs.exists resolves against the build cwd, so
-// the guard checked directories that do not exist and silently passed.
-it("keeps the prefix of a UNC path instead of going relative", () => {
-  const paths = ancestorNodeModulesPaths("\\\\server\\share\\tmp\\app", "\\");
-  for (const candidate of paths) {
-    assert.ok(candidate.startsWith("\\\\server\\share"), candidate);
-  }
-  assert.deepStrictEqual(paths[0], "\\\\server\\share\\tmp\\node_modules");
-});
-
 it.effect.skipIf(!symlinksSupported)("rebases packaged links into the isolated tree", () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -2345,9 +2318,54 @@ it.effect.skipIf(!symlinksSupported)("rebases packaged links into the isolated t
   }).pipe(Effect.provide(NodeServices.layer)),
 );
 
-it("ignores trailing separators", () => {
-  assert.deepStrictEqual(
-    ancestorNodeModulesPaths("C:\\tmp\\probe\\app\\", "\\"),
-    ancestorNodeModulesPaths("C:\\tmp\\probe\\app", "\\"),
-  );
-});
+it.effect("blocks module resolution outside the packaged tree", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-resolution-guard-" });
+      const app = path.join(root, "app");
+      const guard = path.join(root, "resolution-guard.cjs");
+      const entry = path.join(app, "entry.mjs");
+      const localPackage = path.join(app, "node_modules/local-package");
+      const externalPackage = path.join(root, "node_modules/external-package");
+
+      yield* fs.makeDirectory(localPackage, { recursive: true });
+      yield* fs.makeDirectory(externalPackage, { recursive: true });
+      yield* fs.writeFileString(
+        path.join(localPackage, "package.json"),
+        '{"type":"module","exports":"./index.js"}',
+      );
+      yield* fs.writeFileString(path.join(localPackage, "index.js"), "export default true;\n");
+      yield* fs.writeFileString(
+        path.join(externalPackage, "package.json"),
+        '{"type":"module","exports":"./index.js"}',
+      );
+      yield* fs.writeFileString(path.join(externalPackage, "index.js"), "export default true;\n");
+      yield* fs.writeFileString(guard, renderBundleResolutionGuard(app));
+
+      yield* fs.writeFileString(entry, 'import "local-package";\n');
+      const localResult = NodeChildProcess.spawnSync(
+        process.execPath,
+        ["--require", guard, entry],
+        {
+          cwd: app,
+          encoding: "utf8",
+        },
+      );
+      assert.equal(localResult.status, 0, localResult.stderr);
+
+      yield* fs.writeFileString(entry, 'import "external-package";\n');
+      const externalResult = NodeChildProcess.spawnSync(
+        process.execPath,
+        ["--require", guard, entry],
+        { cwd: app, encoding: "utf8" },
+      );
+      assert.notEqual(externalResult.status, 0);
+      assert.include(
+        externalResult.stderr,
+        "Bundle self-containment check blocked resolution outside the packaged tree",
+      );
+    }),
+  ).pipe(Effect.provide(NodeServices.layer)),
+);

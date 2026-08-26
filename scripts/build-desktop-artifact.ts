@@ -1893,63 +1893,6 @@ export const preflightWindowsDesktopBuild = Effect.fn("preflightWindowsDesktopBu
   },
 );
 
-/**
- * Every `node_modules` directory that would be visible from `startDir`.
- *
- * The self-containment check is only meaningful in a directory with none of
- * these: Node walks parents when resolving a bare import, so a stray
- * node_modules above the probe would satisfy imports that are missing from the
- * packaged tree and turn the check into a silent pass.
- */
-function trimTrailingSeparators(value: string): string {
-  let end = value.length;
-  while (end > 1 && (value[end - 1] === "/" || value[end - 1] === "\\")) end -= 1;
-  return value.slice(0, end);
-}
-
-/**
- * Length of the `\\server\share` prefix, or 0 when the path is not UNC.
- *
- * The share is the highest real directory on a UNC path: `\\server` on its own
- * is not one, so the ancestor walk must stop there.
- */
-function uncShareRootLength(value: string): number {
-  const isUnc = value.startsWith("\\\\") || value.startsWith("//");
-  if (!isUnc) return 0;
-  const separator = /[\\/]/;
-  const serverEnd = value.slice(2).search(separator);
-  if (serverEnd < 0) return value.length;
-  const shareStart = 2 + serverEnd + 1;
-  const shareEnd = value.slice(shareStart).search(separator);
-  return shareEnd < 0 ? value.length : shareStart + shareEnd;
-}
-
-export function ancestorNodeModulesPaths(
-  startDir: string,
-  separator: string,
-): ReadonlyArray<string> {
-  // Walks with lastIndexOf rather than splitting into segments so UNC roots
-  // (\\server\share) and drive roots keep their prefix instead of being
-  // rebuilt into a relative path that silently resolves against the build cwd.
-  const paths: string[] = [];
-  let current = trimTrailingSeparators(startDir);
-  // On a UNC path the share itself is the root: \\server is not a directory, so
-  // walking past \\server\share would emit paths that cannot exist.
-  const uncRootLength = uncShareRootLength(current);
-  for (;;) {
-    const cut = Math.max(current.lastIndexOf("/"), current.lastIndexOf("\\"));
-    if (cut < 0 || (uncRootLength > 0 && cut < uncRootLength)) break;
-    const parent = cut === 0 ? current.slice(0, 1) : current.slice(0, cut);
-    if (parent === current) break;
-    paths.push(
-      parent.endsWith(separator) ? `${parent}node_modules` : `${parent}${separator}node_modules`,
-    );
-    if (cut === 0) break;
-    current = parent;
-  }
-  return paths;
-}
-
 const NativeMarkerManifest = Schema.Struct({
   dependencies: Schema.optional(Schema.Record(Schema.String, Schema.String)),
   optionalDependencies: Schema.optional(Schema.Record(Schema.String, Schema.String)),
@@ -2063,6 +2006,28 @@ export const copyDirectoryPreservingSymlinks = Effect.fn("copyDirectoryPreservin
   },
 );
 
+export function renderBundleResolutionGuard(allowedRoot: string): string {
+  return `"use strict";
+const { registerHooks } = require("node:module");
+const path = require("node:path");
+const { fileURLToPath } = require("node:url");
+const allowedRoot = ${JSON.stringify(allowedRoot)};
+
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    const result = nextResolve(specifier, context);
+    if (!result.url.startsWith("file:")) return result;
+    const resolvedPath = fileURLToPath(result.url);
+    const relative = path.relative(allowedRoot, resolvedPath);
+    if (relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative)) {
+      throw new Error("Bundle self-containment check blocked resolution outside the packaged tree: " + resolvedPath);
+    }
+    return result;
+  },
+});
+`;
+}
+
 const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBundleIsSelfContained")(
   function* (input: { readonly asarPath: string; readonly verbose: boolean }) {
     const fs = yield* FileSystem.FileSystem;
@@ -2086,17 +2051,11 @@ const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBundleIsSel
     // must not let the probe resolve through the build tree.
     yield* copyDirectoryPreservingSymlinks(extractedApp, probeApp);
 
-    // Guard the guard: if anything above the probe provides a node_modules, a
-    // missing dependency would resolve there and the check would pass while the
-    // packaged tree is broken.
-    for (const candidate of ancestorNodeModulesPaths(probeApp, path.sep)) {
-      if (yield* fs.exists(candidate).pipe(Effect.orElseSucceed(() => false))) {
-        return yield* new BundleNotSelfContainedError({
-          exitCode: -1,
-          output: `Refusing to report success: ${candidate} is visible from the probe directory, so bare imports could resolve outside the packaged tree. Remove or rename it, or point TMPDIR somewhere without one.`,
-        });
-      }
-    }
+    // Node walks parent node_modules directories even with global search paths
+    // disabled. Enforce the package boundary in the resolver so the check stays
+    // isolated when an OS temp directory lives below a user's node_modules.
+    const resolutionGuard = path.join(probeRoot, "resolution-guard.cjs");
+    yield* fs.writeFileString(resolutionGuard, renderBundleResolutionGuard(probeApp));
 
     const entryPoint = path.join(probeApp, "apps/server/dist/bin.mjs");
     if (!(yield* fs.exists(entryPoint).pipe(Effect.orElseSucceed(() => false)))) {
@@ -2119,7 +2078,7 @@ const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBundleIsSel
         // CommonJS resolution still falls back to $HOME/.node_modules,
         // $HOME/.node_libraries and the install prefix, so a globally installed
         // copy of a missing dependency would quietly satisfy this check.
-        ["--no-global-search-paths", entryPoint, "--version"],
+        ["--require", resolutionGuard, "--no-global-search-paths", entryPoint, "--version"],
         {
           cwd: probeApp,
           stdout: "pipe",
